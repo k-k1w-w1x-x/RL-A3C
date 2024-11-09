@@ -1,6 +1,6 @@
 # description
 A3C implementation with PyTorch with lastest version of Gymnasium.
-Clone from [pytorch-a3c](https://github.com/ikostrikov/pytorch-a3c)
+Clone from [pytorch-a3c](https://github.com/ikostrikov/pytorch-a3c),modified a little.
 # pytorch-a3c
 
 This is a PyTorch implementation of Asynchronous Advantage Actor Critic (A3C) from ["Asynchronous Methods for Deep Reinforcement Learning"](https://arxiv.org/pdf/1602.01783v1.pdf).
