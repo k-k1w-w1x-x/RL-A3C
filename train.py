@@ -10,10 +10,11 @@ from model import ActorCritic
 
 def ensure_shared_grads(model, shared_model):
     for param, shared_param in zip(model.parameters(),
-                                   shared_model.parameters()):
-        if shared_param.grad is not None:
-            return
-        shared_param._grad = param.grad
+                               shared_model.parameters()):
+        if shared_param.grad is None:
+            shared_param._grad = param.grad
+        else:
+            shared_param._grad.data.add_(param.grad.data)
 
 
 def train(rank, args, shared_model, counter, lock, optimizer=None, weight_allocator=None):
@@ -127,16 +128,19 @@ def train(rank, args, shared_model, counter, lock, optimizer=None, weight_alloca
         (policy_loss + args.value_loss_coef * value_loss).backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
-        # 在更新共享模型时应用权重
+        # 应用权重
         if weight_allocator is not None:
             weight = weight_allocator.get_weight(rank)
-            # 对梯度应用权重
             for param in model.parameters():
                 if param.grad is not None:
                     param.grad.data.mul_(weight)
 
-        ensure_shared_grads(model, shared_model)
-        optimizer.step()
+        # 使用锁保护整个更新过程
+        with lock:
+            ensure_shared_grads(model, shared_model)
+            optimizer.step()
+            # 清除shared_model的梯度，为下一次更新做准备
+            optimizer.zero_grad()
 
         # 添加模型参数检查
         def check_model_state():
