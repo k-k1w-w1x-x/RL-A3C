@@ -5,8 +5,9 @@ from gym.spaces.box import Box
 
 
 # Taken from https://github.com/openai/universe-starter-agent
-def create_atari_env(env_id):
-    env = gym.make(env_id)
+def create_atari_env(env_id, render_mode=None):
+    # env = gym.make(env_id)
+    env = gym.make(env_id, render_mode=render_mode)
     # env = NoopResetEnv(env, noop_max=30)
     # env = MaxAndSkipEnv(env, skip=4)
     env = AtariRescale42x42(env)

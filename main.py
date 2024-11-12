@@ -42,6 +42,10 @@ parser.add_argument('--env-name', default='PongDeterministic-v4',
                     help='environment to train on (default: PongDeterministic-v4)')
 parser.add_argument('--no-shared', default=False,
                     help='use an optimizer without shared momentum.')
+parser.add_argument('--train-time', type=int, default=1800,
+                    help='training time in seconds (default: 1800)')
+parser.add_argument('--test-time', type=int, default=1800,
+                    help='testing time in seconds (default: 1800)')
 
 
 if __name__ == '__main__':

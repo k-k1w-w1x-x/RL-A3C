@@ -21,7 +21,7 @@ def train(rank, args, shared_model, counter, lock, optimizer=None, weight_alloca
     torch.manual_seed(args.seed + rank)
 
     start_time = time.time()
-    training_duration = 1800
+    training_duration = args.train_time
 
     env = create_atari_env(args.env_name)
     state, _ = env.reset()

@@ -37,7 +37,7 @@ def test(rank, args, shared_model, counter):
     # 新增：记录测试结果
     test_results = []
     start_test_time = datetime.now()
-    test_duration = timedelta(minutes=30)
+    test_duration = timedelta(seconds=args.test_time)
 
     while True:
         episode_length += 1
@@ -80,10 +80,11 @@ def test(rank, args, shared_model, counter):
                 counter.value, counter.value / (time.time() - start_time),
                 reward_sum, episode_length))
                 
-            # 检查是否达到5分钟
             if datetime.now() - start_test_time >= test_duration:
                 # 绘制结果
                 plot_results(test_results, args)
+                # 进行最终测试并显示游戏画面
+                evaluate_with_render(shared_model, args)
                 break
                 
             reward_sum = 0
@@ -117,3 +118,37 @@ def plot_results(results, args):
     plt.tight_layout()
     plt.savefig(f'test_results_{args.env_name}_{args.num_processes}proc_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.png')
     plt.close()
+
+def evaluate_with_render(shared_model, args):
+    """测试模型并实时显示游戏画面"""
+    # 创建带渲染的环境
+    env = create_atari_env(args.env_name, render_mode="human")
+    
+    # 创建模型并加载参数
+    model = ActorCritic(env.observation_space.shape[0], env.action_space)
+    model.load_state_dict(shared_model.state_dict())
+    model.eval()
+    
+    state, _ = env.reset()
+    done = False
+    total_reward = 0
+    
+    # LSTM隐藏状态
+    cx = torch.zeros(1, 256)
+    hx = torch.zeros(1, 256)
+    
+    while not done:
+        state = torch.from_numpy(state)
+        with torch.no_grad():
+            value, logit, (hx, cx) = model((state.unsqueeze(0), (hx, cx)))
+        prob = F.softmax(logit, dim=-1)
+        action = prob.max(1, keepdim=True)[1].numpy()
+        
+        state, reward, terminated, truncated, _ = env.step(action[0, 0])
+        done = terminated or truncated
+        total_reward += reward
+        
+        if done:
+            print(f"Final evaluation - Total reward: {total_reward}")
+    
+    env.close()
