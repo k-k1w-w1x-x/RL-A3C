@@ -12,7 +12,7 @@ from envs import create_atari_env
 from model import ActorCritic
 from test import test
 from train import train
-from weight_allocator import WeightAllocator
+from weight_allocator import create_weight_allocator
 
 # Based on
 # https://github.com/pytorch/examples/tree/master/mnist_hogwild
@@ -46,6 +46,9 @@ parser.add_argument('--train-time', type=int, default=1800,
                     help='training time in seconds (default: 1800)')
 parser.add_argument('--test-time', type=int, default=1800,
                     help='testing time in seconds (default: 1800)')
+parser.add_argument('--weight-allocator', type=str, default='history',
+                    choices=['ucb', 'history'],
+                    help='weight allocator type (default: history)')
 
 
 if __name__ == '__main__':
@@ -66,8 +69,12 @@ if __name__ == '__main__':
         optimizer = my_optim.SharedAdam(shared_model.parameters(), lr=args.lr)
         optimizer.share_memory()
 
-    # 创建权重分配器（已经使用共享内存）
-    weight_allocator = WeightAllocator(args.num_processes)
+    # 创建权重分配器
+    weight_allocator = create_weight_allocator(
+        args.weight_allocator, 
+        args.num_processes,
+        c=0.5  # UCB的探索参数
+    )
 
     processes = []
 
