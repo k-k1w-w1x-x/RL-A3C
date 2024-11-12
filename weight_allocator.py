@@ -8,21 +8,13 @@ class WeightAllocator:
         
         # 使用共享内存的张量
         self.weights = torch.ones(num_processes, dtype=torch.float32).share_memory_() / num_processes
-        self.performance_buffer = torch.zeros((num_processes, 100), dtype=torch.float32).share_memory_()
-        self.history_lengths = torch.zeros(num_processes, dtype=torch.long).share_memory_()
         
-        # 添加UCB所需的统计数据
+        # UCB统计数据
         self.total_counts = torch.zeros(num_processes, dtype=torch.float32).share_memory_()
         self.value_estimates = torch.zeros(num_processes, dtype=torch.float32).share_memory_()
             
     def update_performance(self, rank, reward):
-        """更新进程的表现历史和UCB统计"""
-        # 更新性能缓冲区
-        idx = self.history_lengths[rank] % 100
-        self.performance_buffer[rank, idx] = reward
-        self.history_lengths[rank] += 1
-        
-        # 更新UCB统计
+        """更新进程的UCB统计"""
         self.total_counts[rank] += 1
         n = self.total_counts[rank]
         value = self.value_estimates[rank]
