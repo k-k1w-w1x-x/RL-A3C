@@ -49,6 +49,8 @@ parser.add_argument('--test-time', type=int, default=1800,
 parser.add_argument('--weight-allocator', type=str, default='history',
                     choices=['ucb', 'history'],
                     help='weight allocator type (default: history)')
+parser.add_argument('--l2-reg-coef', type=float, default=0.01,
+                    help='L2 regularization coefficient (default: 0.01)')
 
 
 if __name__ == '__main__':
