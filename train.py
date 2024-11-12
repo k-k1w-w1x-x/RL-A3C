@@ -20,6 +20,10 @@ def ensure_shared_grads(model, shared_model):
 def train(rank, args, shared_model, counter, lock, optimizer=None, weight_allocator=None):
     torch.manual_seed(args.seed + rank)
 
+    # 为每个进程生成一个独特的学习率
+    process_lr = max(0, torch.normal(mean=args.lr, std=args.lr * 0.1, size=(1,)).item())  # 以args.lr为均值，10%为标准差
+    print(f"Process {rank} using learning rate: {process_lr}")
+
     start_time = time.time()
     training_duration = args.train_time
 
@@ -30,12 +34,11 @@ def train(rank, args, shared_model, counter, lock, optimizer=None, weight_alloca
     model = ActorCritic(env.observation_space.shape[0], env.action_space)
 
     if optimizer is None:
-        optimizer = optim.Adam(shared_model.parameters(), lr=args.lr)
+        optimizer = optim.Adam(shared_model.parameters(), lr=process_lr)
 
     model.train()
 
     done = True
-    # print("model.train()")
     episode_length = 0
     episode_reward = 0  # 记录每个episode的总奖励
     while True:
@@ -45,7 +48,6 @@ def train(rank, args, shared_model, counter, lock, optimizer=None, weight_alloca
             break
 
         # Sync with the shared model
-        # print("train : model.load_state_dict()")
         model.load_state_dict(shared_model.state_dict())
         if done:
             cx = torch.zeros(1, 256)
@@ -58,7 +60,6 @@ def train(rank, args, shared_model, counter, lock, optimizer=None, weight_alloca
         log_probs = []
         rewards = []
         entropies = []
-        # print("args.num_steps", args.num_steps)
         for step in range(args.num_steps):
             episode_length += 1
             value, logit, (hx, cx) = model((state.unsqueeze(0),
