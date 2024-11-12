@@ -12,6 +12,7 @@ from envs import create_atari_env
 from model import ActorCritic
 from test import test
 from train import train
+from weight_allocator import WeightAllocator
 
 # Based on
 # https://github.com/pytorch/examples/tree/master/mnist_hogwild
@@ -61,6 +62,9 @@ if __name__ == '__main__':
         optimizer = my_optim.SharedAdam(shared_model.parameters(), lr=args.lr)
         optimizer.share_memory()
 
+    # 创建权重分配器（已经使用共享内存）
+    weight_allocator = WeightAllocator(args.num_processes)
+
     processes = []
 
     counter = mp.Value('i', 0)
@@ -72,7 +76,7 @@ if __name__ == '__main__':
 
     for rank in range(0, args.num_processes):
         print("train task created")
-        p = mp.Process(target=train, args=(rank, args, shared_model, counter, lock, optimizer))
+        p = mp.Process(target=train, args=(rank, args, shared_model, counter, lock, optimizer, weight_allocator))
         p.start()
         processes.append(p)
     for p in processes:

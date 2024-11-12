@@ -16,7 +16,7 @@ def ensure_shared_grads(model, shared_model):
         shared_param._grad = param.grad
 
 
-def train(rank, args, shared_model, counter, lock, optimizer=None):
+def train(rank, args, shared_model, counter, lock, optimizer=None, weight_allocator=None):
     torch.manual_seed(args.seed + rank)
 
     start_time = time.time()
@@ -36,6 +36,7 @@ def train(rank, args, shared_model, counter, lock, optimizer=None):
     done = True
     # print("model.train()")
     episode_length = 0
+    episode_reward = 0  # 记录每个episode的总奖励
     while True:
         # 检查是否超过5分钟
         if time.time() - start_time > training_duration:
@@ -110,10 +111,29 @@ def train(rank, args, shared_model, counter, lock, optimizer=None):
             policy_loss = policy_loss - \
                 log_probs[i] * gae.detach() - args.entropy_coef * entropies[i]
 
+        # 在获得奖励时累加
+        episode_reward += reward
+        
+        if done:
+            # 更新权重分配器
+            if weight_allocator is not None:
+                with lock:
+                    weight_allocator.update_performance(rank, episode_reward)
+                    weight_allocator.update_weights()
+            episode_reward = 0
+
         optimizer.zero_grad()
 
         (policy_loss + args.value_loss_coef * value_loss).backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+
+        # 在更新共享模型时应用权重
+        if weight_allocator is not None:
+            weight = weight_allocator.get_weight(rank)
+            # 对梯度应用权重
+            for param in model.parameters():
+                if param.grad is not None:
+                    param.grad.data.mul_(weight)
 
         ensure_shared_grads(model, shared_model)
         optimizer.step()
