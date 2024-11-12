@@ -37,7 +37,7 @@ def test(rank, args, shared_model, counter):
     # 新增：记录测试结果
     test_results = []
     start_test_time = datetime.now()
-    test_duration = timedelta(minutes=15)
+    test_duration = timedelta(minutes=30)
 
     while True:
         episode_length += 1
@@ -83,7 +83,7 @@ def test(rank, args, shared_model, counter):
             # 检查是否达到5分钟
             if datetime.now() - start_test_time >= test_duration:
                 # 绘制结果
-                plot_results(test_results)
+                plot_results(test_results, args)
                 break
                 
             reward_sum = 0
@@ -94,7 +94,7 @@ def test(rank, args, shared_model, counter):
 
         state = torch.from_numpy(state)
 
-def plot_results(results):
+def plot_results(results, args):
     """绘制测试结果"""
     episodes = range(len(results))
     rewards = [r['reward'] for r in results]
@@ -104,16 +104,16 @@ def plot_results(results):
     
     plt.subplot(1, 2, 1)
     plt.plot(episodes, rewards, 'b-')
-    plt.title('Episode Rewards')
+    plt.title(f'Episode Rewards\n{args.env_name} ({args.num_processes} processes)')
     plt.xlabel('Episode')
     plt.ylabel('Reward')
     
     plt.subplot(1, 2, 2)
     plt.plot(episodes, lengths, 'r-')
-    plt.title('Episode Lengths')
+    plt.title(f'Episode Lengths\n{args.env_name} ({args.num_processes} processes)')
     plt.xlabel('Episode')
     plt.ylabel('Length')
     
     plt.tight_layout()
-    plt.savefig(f'test_results_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.png')
+    plt.savefig(f'test_results_{args.env_name}_{args.num_processes}proc_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.png')
     plt.close()
