@@ -21,7 +21,7 @@ def train(rank, args, shared_model, counter, lock, optimizer=None, weight_alloca
     torch.manual_seed(args.seed + rank)
 
     # 为每个进程生成一个独特的学习率
-    process_lr = max(0, torch.normal(mean=args.lr, std=args.lr * 0.1, size=(1,)).item())  # 以args.lr为均值，10%为标准差
+    process_lr = max(0, torch.normal(mean=args.lr, std=args.lr * 0.5, size=(1,)).item())  # 以args.lr为均值，10%为标准差
     print(f"Process {rank} using learning rate: {process_lr}")
 
     start_time = time.time()
@@ -119,7 +119,8 @@ def train(rank, args, shared_model, counter, lock, optimizer=None, weight_alloca
             l2_reg += ((param - shared_param.detach()) ** 2).sum()
 
         # 添加L2距离到总损失中
-        total_loss = policy_loss + args.value_loss_coef * value_loss + args.l2_reg_coef * l2_reg
+        total_loss = policy_loss + args.value_loss_coef * value_loss \
+            # + args.l2_reg_coef * l2_reg
 
         optimizer.zero_grad()
 
@@ -129,6 +130,8 @@ def train(rank, args, shared_model, counter, lock, optimizer=None, weight_alloca
         # 应用权重
         if weight_allocator is not None:
             weight = weight_allocator.get_weight(rank)
+            if weight >0.5 or weight <0.0001:
+                print(f"Process {rank} using weight: {weight}")
             for param in model.parameters():
                 if param.grad is not None:
                     param.grad.data.mul_(weight)
