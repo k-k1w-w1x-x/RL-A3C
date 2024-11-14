@@ -17,6 +17,78 @@ def ensure_shared_grads(model, shared_model):
             shared_param._grad.data.add_(param.grad.data)
 
 
+def local_training_step(model, state, done, cx, hx, args, lock, counter, env):
+    values = []
+    log_probs = []
+    rewards = []
+    entropies = []
+    episode_length = 0
+    episode_reward = 0
+
+    for step in range(args.num_steps):
+        episode_length += 1
+        value, logit, (hx, cx) = model((state.unsqueeze(0), (hx, cx)))
+        prob = F.softmax(logit, dim=-1)
+        log_prob = F.log_softmax(logit, dim=-1)
+        entropy = -(log_prob * prob).sum(1, keepdim=True)
+        entropies.append(entropy)
+
+        action = prob.multinomial(num_samples=1).detach()
+        log_prob = log_prob.gather(1, action)
+
+        state, reward, terminated, truncated, _ = env.step(action.item())
+        done = terminated or truncated or episode_length >= args.max_episode_length
+        reward = max(min(reward, 1), -1)
+
+        with lock:
+            counter.value += 1
+
+        if done:
+            episode_length = 0
+            state, _ = env.reset()
+
+        state = torch.from_numpy(state)
+        values.append(value)
+        log_probs.append(log_prob)
+        rewards.append(reward)
+        episode_reward += reward
+
+        if done:
+            break
+
+    R = torch.zeros(1, 1)
+    if not done:
+        value, _, _ = model((state.unsqueeze(0), (hx, cx)))
+        R = value.detach()
+
+    values.append(R)
+    return values, log_probs, rewards, entropies, state, done, cx, hx, episode_reward
+
+
+def compute_loss(values, log_probs, rewards, entropies, args, model, shared_model):
+    R = torch.zeros(1, 1)
+    policy_loss = 0
+    value_loss = 0
+    gae = torch.zeros(1, 1)
+    
+    for i in reversed(range(len(rewards))):
+        R = args.gamma * R + rewards[i]
+        advantage = R - values[i]
+        value_loss = value_loss + 0.5 * advantage.pow(2)
+
+        delta_t = rewards[i] + args.gamma * values[i + 1] - values[i]
+        gae = gae * args.gamma * args.gae_lambda + delta_t
+        policy_loss = policy_loss - log_probs[i] * gae.detach() - args.entropy_coef * entropies[i]
+
+    # 计算L2正则化
+    l2_reg = 0
+    for param, shared_param in zip(model.parameters(), shared_model.parameters()):
+        l2_reg += ((param - shared_param.detach()) ** 2).sum()
+
+    total_loss = policy_loss + args.value_loss_coef * value_loss
+    return total_loss, policy_loss, value_loss
+
+
 def train(rank, args, shared_model, counter, lock, optimizer=None, weight_allocator=None):
     torch.manual_seed(args.seed + rank)
 
@@ -47,8 +119,9 @@ def train(rank, args, shared_model, counter, lock, optimizer=None, weight_alloca
             print(f"Training finished after {training_duration} seconds")
             break
 
-        # Sync with the shared model
+        # 加载共享模型
         model.load_state_dict(shared_model.state_dict())
+        
         if done:
             cx = torch.zeros(1, 256)
             hx = torch.zeros(1, 256)
@@ -56,126 +129,41 @@ def train(rank, args, shared_model, counter, lock, optimizer=None, weight_alloca
             cx = cx.detach()
             hx = hx.detach()
 
-        values = []
-        log_probs = []
-        rewards = []
-        entropies = []
-        for step in range(args.num_steps):
-            episode_length += 1
-            value, logit, (hx, cx) = model((state.unsqueeze(0),
-                                            (hx, cx)))
-            prob = F.softmax(logit, dim=-1)
-            log_prob = F.log_softmax(logit, dim=-1)
-            entropy = -(log_prob * prob).sum(1, keepdim=True)
-            entropies.append(entropy)
+        # 执行两次本地训练
+        accumulated_loss = 0
+        for _ in range(2):
+            values, log_probs, rewards, entropies, state, done, cx, hx, episode_reward = \
+                local_training_step(model, state, done, cx, hx, args, lock, counter, env)
+            
+            total_loss, policy_loss, value_loss = compute_loss(
+                values, log_probs, rewards, entropies, args, model, shared_model)
+            accumulated_loss += total_loss
 
-            action = prob.multinomial(num_samples=1).detach()
-            log_prob = log_prob.gather(1, action)
-
-            state, reward, terminated, truncated, _ = env.step(action.item())
-            done = terminated or truncated or episode_length >= args.max_episode_length
-            reward = max(min(reward, 1), -1)
-
-            with lock:
-                counter.value += 1
-
-            if done:
-                episode_length = 0
-                state, _ = env.reset()
-
-            state = torch.from_numpy(state)
-            values.append(value)
-            log_probs.append(log_prob)
-            rewards.append(reward)
-
-            if done:
-                break
-
-        R = torch.zeros(1, 1)
-        if not done:
-            value, _, _ = model((state.unsqueeze(0), (hx, cx)))
-            R = value.detach()
-
-        values.append(R)
-        policy_loss = 0
-        value_loss = 0
-        gae = torch.zeros(1, 1)
-        for i in reversed(range(len(rewards))):
-            R = args.gamma * R + rewards[i]
-            advantage = R - values[i]
-            value_loss = value_loss + 0.5 * advantage.pow(2)
-
-            # Generalized Advantage Estimation
-            delta_t = rewards[i] + args.gamma * \
-                values[i + 1] - values[i]
-            gae = gae * args.gamma * args.gae_lambda + delta_t
-
-            policy_loss = policy_loss - \
-                log_probs[i] * gae.detach() - args.entropy_coef * entropies[i]
-
-        # 计算中央模型和当前模型的参数L2距离
-        l2_reg = 0
-        for param, shared_param in zip(model.parameters(), shared_model.parameters()):
-            l2_reg += ((param - shared_param.detach()) ** 2).sum()
-
-        # 添加L2距离到总损失中
-        total_loss = policy_loss + args.value_loss_coef * value_loss \
-            # + args.l2_reg_coef * l2_reg
-
+        # 计算累积梯度
         optimizer.zero_grad()
-
-        total_loss.backward()
+        accumulated_loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
         # 应用权重
         if weight_allocator is not None:
             weight = weight_allocator.get_weight(rank)
-            if weight >0.5 or weight <0.0001:
+            if (weight > 0.5 or weight < 0.0001):
                 print(f"Process {rank} using weight: {weight}")
             for param in model.parameters():
                 if param.grad is not None:
                     param.grad.data.mul_(weight)
 
-        # 使用锁保护整个更新过程
+        # 更新共享模型
         with lock:
             ensure_shared_grads(model, shared_model)
             optimizer.step()
-            # 清除shared_model的梯度，为下一次更新做准备
             optimizer.zero_grad()
 
-        # 添加模型参数检查
-        def check_model_state():
-            for name, param in model.named_parameters():
-                if torch.isnan(param).any():
-                    print(f"NaN found in {name}")
-                if torch.isinf(param).any():
-                    print(f"Inf found in {name}")
+        # 更新权重分配器
+        if done and weight_allocator is not None:
+            with lock:
+                weight_allocator.update_performance(rank, episode_reward)
+                weight_allocator.update_weights()
 
-        check_model_state()  # 训练开始时
-        check_model_state()  # 每个episode结束时
-
-        # 在训练循环中添加损失值打印
-        # print(f"Episode {counter.value}")
-        # print(f"Policy Loss: {policy_loss.item()}")
-        # print(f"Value Loss: {value_loss.item()}")
-        # print(f"Total Loss: {(policy_loss + args.value_loss_coef * value_loss).item()}")
-
-        # 在每个episode结束时也可以打印剩余时间
-        # elapsed_time = time.time() - start_time
-        # remaining_time = max(0, training_duration - elapsed_time)
-        # print(f"Time remaining: {remaining_time:.1f} seconds")
-
-        # 在获得奖励时累加
-        episode_reward += reward
-        
-        if done:
-            # 更新权重分配器
-            if weight_allocator is not None:
-                with lock:
-                    weight_allocator.update_performance(rank, episode_reward)
-                    weight_allocator.update_weights()
-            episode_reward = 0
-
-    # 训练结束后关闭环境
     env.close()
     return
