@@ -99,7 +99,7 @@ def plot_results(results, args):
     episodes = range(len(results))
     rewards = [r['reward'] for r in results]
     lengths = [r['length'] for r in results]
-    
+    print("rewards:", rewards)
     plt.figure(figsize=(12, 6))
     
     plt.subplot(1, 2, 1)
