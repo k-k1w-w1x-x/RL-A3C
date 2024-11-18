@@ -80,7 +80,7 @@ def test(rank, args, shared_model, counter):
                 counter.value, counter.value / (time.time() - start_time),
                 reward_sum, episode_length))
                 
-            # 检查是否达到5分钟
+
             if datetime.now() - start_test_time >= test_duration:
                 # 绘制结果
                 plot_results(test_results, args)

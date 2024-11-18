@@ -37,7 +37,7 @@ def train(rank, args, shared_model, counter, lock, optimizer=None):
     # print("model.train()")
     episode_length = 0
     while True:
-        # 检查是否超过5分钟
+
         if time.time() - start_time > training_duration:
             print(f"Training finished after {training_duration} seconds")
             break
