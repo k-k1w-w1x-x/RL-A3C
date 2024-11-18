@@ -36,11 +36,22 @@ def train(rank, args, shared_model, counter, lock, optimizer=None, weight_alloca
     if optimizer is None:
         optimizer = optim.Adam(shared_model.parameters(), lr=process_lr)
 
+    # 添加KL相关参数
+    beta = torch.tensor(args.beta_prime, requires_grad=False)  # 初始化为tensor,default=0.01
+    target_kl = args.kl_target  # KL散度的目标值,default=0.001
+    kl_max = 1.2  # KL散度的最大值
+    kl_min = 0.8  # KL散度的最小值
+    beta_up = 1.5  # beta的增加系数
+    beta_down = 0.5  # beta的减少系数
+    beta_min = 1e-6  # beta的最小值
+    beta_max = 0.01  # beta的最大值
+    # adaptive_coef = 0.1  # 自适应系数，控制beta调整的幅度
+    
     model.train()
-
     done = True
     episode_length = 0
-    episode_reward = 0  # 记录每个episode的总奖励
+    episode_reward = 0
+
     while True:
         # 检查是否超过5分钟
         if time.time() - start_time > training_duration:
@@ -56,19 +67,25 @@ def train(rank, args, shared_model, counter, lock, optimizer=None, weight_alloca
             cx = cx.detach()
             hx = hx.detach()
 
+        # 存储old policy的概率分布
+        old_probs = []
         values = []
         log_probs = []
         rewards = []
         entropies = []
+        
         for step in range(args.num_steps):
             episode_length += 1
-            value, logit, (hx, cx) = model((state.unsqueeze(0),
-                                            (hx, cx)))
+            value, logit, (hx, cx) = model((state.unsqueeze(0), (hx, cx)))
             prob = F.softmax(logit, dim=-1)
             log_prob = F.log_softmax(logit, dim=-1)
+            
+            # 保存old policy的概率分布
+            old_probs.append(prob.detach())
+            
             entropy = -(log_prob * prob).sum(1, keepdim=True)
             entropies.append(entropy)
-
+            
             action = prob.multinomial(num_samples=1).detach()
             log_prob = log_prob.gather(1, action)
 
@@ -99,34 +116,54 @@ def train(rank, args, shared_model, counter, lock, optimizer=None, weight_alloca
         values.append(R)
         policy_loss = 0
         value_loss = 0
+        kl_loss = 0
         gae = torch.zeros(1, 1)
+        
+        # 计算总的KL散度
+        total_kl = 0
+        
         for i in reversed(range(len(rewards))):
             R = args.gamma * R + rewards[i]
             advantage = R - values[i]
             value_loss = value_loss + 0.5 * advantage.pow(2)
 
             # Generalized Advantage Estimation
-            delta_t = rewards[i] + args.gamma * \
-                values[i + 1] - values[i]
+            delta_t = rewards[i] + args.gamma * values[i + 1] - values[i]
             gae = gae * args.gamma * args.gae_lambda + delta_t
 
-            policy_loss = policy_loss - \
-                log_probs[i] * gae.detach() - args.entropy_coef * entropies[i]
+            # 计算新旧策略的KL散度
+            value, logit, _ = model((state.unsqueeze(0), (hx, cx)))
+            new_prob = F.softmax(logit, dim=-1)
+            old_prob = old_probs[i]
+            
+            # 计算KL散度
+            kl_div = torch.sum(old_prob * (torch.log(old_prob + 1e-10) - torch.log(new_prob + 1e-10)), dim=-1).mean()
+            kl_loss += kl_div
+            total_kl += kl_div.item()
 
-        # 在获得奖励时累加
-        episode_reward += reward
+            policy_loss = policy_loss - log_probs[i] * gae.detach() - args.entropy_coef * entropies[i]
+
+        # 计算平均KL散度
+        avg_kl = total_kl / len(rewards)
         
-        if done:
-            # 更新权重分配器
-            if weight_allocator is not None:
-                with lock:
-                    weight_allocator.update_performance(rank, episode_reward)
-                    weight_allocator.update_weights()
-            episode_reward = 0
+        # 修改beta的更新逻辑
+        kl_ratio = avg_kl / target_kl
+        if kl_ratio > kl_max:
+            # KL过大，增加beta
+            beta *= beta_up
+        elif kl_ratio < kl_min:
+            # KL过小，减少beta
+            beta *= beta_down
+
+        # 使用torch.clamp替代max函数
+        # 确保beta在合理范围内
+        beta = torch.clamp(beta, min=beta_min, max=beta_max)  # 确保beta保持tensor类型
+
+        # 使用自适应的beta计算总损失
+        total_loss = policy_loss + args.value_loss_coef * value_loss + beta * kl_loss
 
         optimizer.zero_grad()
-
-        (policy_loss + args.value_loss_coef * value_loss).backward()
+        total_loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
         # 应用权重
@@ -153,7 +190,8 @@ def train(rank, args, shared_model, counter, lock, optimizer=None, weight_alloca
 
         check_model_state()  # 训练开始时
         check_model_state()  # 每个episode结束时
-
+        if done:
+            print(f"Process {rank} Beta: {beta}, KL Loss: {kl_loss.item():.4f}")
         # 在训练循环中添加损失值打印
         # print(f"Episode {counter.value}")
         # print(f"Policy Loss: {policy_loss.item()}")

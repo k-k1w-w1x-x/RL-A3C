@@ -49,6 +49,11 @@ parser.add_argument('--test-time', type=int, default=1800,
 parser.add_argument('--weight-allocator', type=str, default='history',
                     choices=['ucb', 'history'],
                     help='weight allocator type (default: history)')
+# KL散度系数
+parser.add_argument('--beta_prime', type=float, default=0.01,
+                    help='KL divergence coefficient')
+parser.add_argument('--kl_target', type=float, default=0.001,
+                    help='KL divergence threshold for learning rate adjustment')
 
 
 if __name__ == '__main__':
