@@ -5,7 +5,10 @@ import gym
 import time
 
 from envs import create_atari_env
-from model import ActorCritic
+# from model import ActorCritic
+from model import A3CWithAttention  # 导入新模型
+
+
 
 
 def ensure_shared_grads(model, shared_model):
@@ -22,21 +25,28 @@ def train(rank, args, shared_model, counter, lock, optimizer=None, weight_alloca
 
     # 为每个进程生成一个独特的学习率
     process_lr = max(0, torch.normal(mean=args.lr, std=args.lr * 0.1, size=(1,)).item())  # 以args.lr为均值，10%为标准差
-    print(f"Process {rank} using learning rate: {process_lr}")
+    # print(f"Process {rank} using learning rate: {process_lr}")
 
     start_time = time.time()
     training_duration = args.train_time
 
-    env = create_atari_env(args.env_name)
+    # env = create_atari_env(args.env_name)
+    env = create_atari_env("PongDeterministic-v4")
     state, _ = env.reset()
     state = torch.from_numpy(state)
 
-    model = ActorCritic(env.observation_space.shape[0], env.action_space)
+    # 替换为新模型
+    model = A3CWithAttention(
+        input_dim=env.observation_space.shape[0],  # 输入维度
+        num_actions=env.action_space.n,         # 动作空间大小
+        num_heads=4                              # 注意力头数量
+    )
+
+    model.load_state_dict(shared_model.state_dict(), strict=False)
+    model.train()  # 切换为训练模式
 
     if optimizer is None:
         optimizer = optim.Adam(shared_model.parameters(), lr=process_lr)
-
-    model.train()
 
     done = True
     episode_length = 0
@@ -48,7 +58,8 @@ def train(rank, args, shared_model, counter, lock, optimizer=None, weight_alloca
             break
 
         # Sync with the shared model
-        model.load_state_dict(shared_model.state_dict())
+        model.load_state_dict(shared_model.state_dict(), strict=False)
+
         if done:
             cx = torch.zeros(1, 256)
             hx = torch.zeros(1, 256)
@@ -62,10 +73,13 @@ def train(rank, args, shared_model, counter, lock, optimizer=None, weight_alloca
         entropies = []
         for step in range(args.num_steps):
             episode_length += 1
-            value, logit, (hx, cx) = model((state.unsqueeze(0),
-                                            (hx, cx)))
-            prob = F.softmax(logit, dim=-1)
-            log_prob = F.log_softmax(logit, dim=-1)
+            # policy, value, logit = model((state.unsqueeze(0), (hx, cx)))
+            policy, value, (hx, cx) = model((state.unsqueeze(0), (hx, cx)))
+
+            prob = F.softmax(policy, dim=-1)
+
+            # log_prob = F.log_softmax(logit, dim=-1)
+            log_prob = F.log_softmax(policy, dim=-1)  # 确保使用 policy 而不是 logit
             entropy = -(log_prob * prob).sum(1, keepdim=True)
             entropies.append(entropy)
 
@@ -106,16 +120,14 @@ def train(rank, args, shared_model, counter, lock, optimizer=None, weight_alloca
             value_loss = value_loss + 0.5 * advantage.pow(2)
 
             # Generalized Advantage Estimation
-            delta_t = rewards[i] + args.gamma * \
-                values[i + 1] - values[i]
+            delta_t = rewards[i] + args.gamma * values[i + 1] - values[i]
             gae = gae * args.gamma * args.gae_lambda + delta_t
 
-            policy_loss = policy_loss - \
-                log_probs[i] * gae.detach() - args.entropy_coef * entropies[i]
+            policy_loss = policy_loss - log_probs[i] * gae.detach() - args.entropy_coef * entropies[i]
 
         # 在获得奖励时累加
         episode_reward += reward
-        
+
         if done:
             # 更新权重分配器
             if weight_allocator is not None:
@@ -126,6 +138,11 @@ def train(rank, args, shared_model, counter, lock, optimizer=None, weight_alloca
 
         optimizer.zero_grad()
 
+        # 确保 policy_loss 和 value_loss 是标量
+        policy_loss = policy_loss.sum()  # 或者使用 .mean()
+        value_loss = value_loss.sum()  # 或者使用 .mean()
+
+        # 反向传播
         (policy_loss + args.value_loss_coef * value_loss).backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
@@ -151,19 +168,7 @@ def train(rank, args, shared_model, counter, lock, optimizer=None, weight_alloca
                 if torch.isinf(param).any():
                     print(f"Inf found in {name}")
 
-        check_model_state()  # 训练开始时
-        check_model_state()  # 每个episode结束时
-
-        # 在训练循环中添加损失值打印
-        # print(f"Episode {counter.value}")
-        # print(f"Policy Loss: {policy_loss.item()}")
-        # print(f"Value Loss: {value_loss.item()}")
-        # print(f"Total Loss: {(policy_loss + args.value_loss_coef * value_loss).item()}")
-
-        # 在每个episode结束时也可以打印剩余时间
-        # elapsed_time = time.time() - start_time
-        # remaining_time = max(0, training_duration - elapsed_time)
-        # print(f"Time remaining: {remaining_time:.1f} seconds")
+        check_model_state()
 
     # 训练结束后关闭环境
     env.close()

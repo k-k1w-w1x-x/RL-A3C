@@ -9,7 +9,8 @@ import torch.multiprocessing as mp
 
 import my_optim
 from envs import create_atari_env
-from model import ActorCritic
+# from model import ActorCritic
+from model import A3CWithAttention 
 from test import test
 from train import train
 from weight_allocator import create_weight_allocator
@@ -18,14 +19,14 @@ from weight_allocator import create_weight_allocator
 # https://github.com/pytorch/examples/tree/master/mnist_hogwild
 # Training settings
 parser = argparse.ArgumentParser(description='A3C')
-parser.add_argument('--lr', type=float, default=0.0001,
-                    help='learning rate (default: 0.0001)')
+parser.add_argument('--lr', type=float, default=0.0005,
+                    help='learning rate (default: 0.0005)')
 parser.add_argument('--gamma', type=float, default=0.99,
                     help='discount factor for rewards (default: 0.99)')
 parser.add_argument('--gae-lambda', type=float, default=1.00,
                     help='lambda parameter for GAE (default: 1.00)')
-parser.add_argument('--entropy-coef', type=float, default=0.01,
-                    help='entropy term coefficient (default: 0.01)')
+parser.add_argument('--entropy-coef', type=float, default=0.02,
+                    help='entropy term coefficient (default: 0.02)')
 parser.add_argument('--value-loss-coef', type=float, default=0.5,
                     help='value loss coefficient (default: 0.5)')
 parser.add_argument('--max-grad-norm', type=float, default=50,
@@ -58,9 +59,13 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
-    env = create_atari_env(args.env_name)
-    shared_model = ActorCritic(
-        env.observation_space.shape[0], env.action_space)
+    # env = create_atari_env(args.env_name)
+    env = create_atari_env("PongDeterministic-v4")
+    shared_model = A3CWithAttention(
+        input_dim=env.observation_space.shape[0],  # 使用 input_dim
+        num_actions=env.action_space.n,  # 动作空间大小
+        num_heads=4  # 你想要的注意力头数
+    )   
     shared_model.share_memory()
 
     if args.no_shared:
