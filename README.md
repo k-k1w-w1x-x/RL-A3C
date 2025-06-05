@@ -1,7 +1,8 @@
 # BIT 2024 冬季《强化学习》课程期末作业
-请查看完整报告：  
-[🌐 完整可视化报告（Canva）](https://www.canva.cn/design/DAGWc1_iG7c/PMc5c1S34j9NeiM1cSSy0Q/edit?utm_content=DAGWc1_iG7c&utm_campaign=designshare&utm_medium=link2&utm_source=sharebutton)
-
+------------------------
+**查看完整的演示报告：**  
+[🌐 完整报告（使用Canva制作）](https://www.canva.cn/design/DAGWc1_iG7c/PMc5c1S34j9NeiM1cSSy0Q/edit?utm_content=DAGWc1_iG7c&utm_campaign=designshare&utm_medium=link2&utm_source=sharebutton)
+------------------------
 本仓库包含北京理工大学2024年冬季学期《强化学习》课程期末作业的代码与实验实现，内容概述如下：
 
 - **算法框架**：基于 [pytorch-a3c](https://github.com/ikostrikov/pytorch-a3c) 仓库，考虑了多种重写并扩展了 A3C（Asynchronous Advantage Actor-Critic）算法。
